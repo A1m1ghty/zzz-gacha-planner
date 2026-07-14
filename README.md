@@ -13,6 +13,12 @@
 
 软保底逐抽曲线属于非官方近似，网站内已单独标注。项目与米哈游或 HoYoverse 无关联。
 
+## 在线使用
+
+网站通过 GitHub Pages 发布：<https://a1m1ghty.github.io/zzz-gacha-planner/>
+
+所有规划数据只保存在当前浏览器中，不需要登录，也不会上传到服务器。
+
 ## 本地运行
 
 ```bash
@@ -20,4 +26,4 @@ npm install
 npm run dev
 ```
 
-生产构建使用 `npm run build`，测试使用 `npm test`。
+Sites 生产构建使用 `npm run build`，GitHub Pages 静态构建使用 `npm run build:pages`，测试使用 `npm test`。
