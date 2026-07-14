@@ -450,7 +450,10 @@ export default function Planner() {
                 <p>PARAMETERS</p>
                 <h2>参数配置</h2>
               </div>
-              <span>输入资源，看目标达成率</span>
+              <div className="sidebar-heading-actions">
+                <span>输入资源，看目标达成率</span>
+                <button onClick={reset}>重置</button>
+              </div>
             </div>
 
             <section className="config-block">
@@ -465,17 +468,6 @@ export default function Planner() {
                 <NumberInput label="信号余波" value={state.resources.residualSignals} suffix="个" onChange={(residualSignals) => setState((current) => ({ ...current, resources: { ...current.resources, residualSignals } }))} />
               </div>
               <p className="resource-note">160 菲林 = 1 抽 · 20 余波 = 1 张母带</p>
-            </section>
-
-            <section className="config-block">
-              <div className="block-heading">
-                <h3>保底状态</h3>
-                <span>两个池独立继承</span>
-              </div>
-              <div className="banner-grid">
-                {renderBanner("agent", "限定代理人")}
-                {renderBanner("engine", "限定音擎")}
-              </div>
             </section>
 
             <section className="config-block goals-block">
@@ -564,6 +556,17 @@ export default function Planner() {
               </div>
             </section>
 
+            <section className="config-block">
+              <div className="block-heading">
+                <h3>保底状态</h3>
+                <span>两个池独立继承</span>
+              </div>
+              <div className="banner-grid">
+                {renderBanner("agent", "限定代理人")}
+                {renderBanner("engine", "限定音擎")}
+              </div>
+            </section>
+
             <details className="config-block profile-section">
               <summary><span><strong>高级：账号返还画像</strong><small>用于估算重复代理人产生的余波</small></span></summary>
               <div className="profile-grid">
@@ -599,7 +602,6 @@ export default function Planner() {
               <div className="data-buttons">
                 <button onClick={exportData}>导出</button>
                 <label className="file-button">导入<input type="file" accept="application/json" onChange={(event) => importData(event.target.files?.[0])} /></label>
-                <button className="danger-text" onClick={reset}>重置</button>
               </div>
             </section>
 

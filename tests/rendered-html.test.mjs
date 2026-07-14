@@ -20,6 +20,12 @@ test("server-renders the finished planner shell", async () => {
   assert.match(html, /新艾利都资源规划局/);
   assert.match(html, /把运气/);
   assert.match(html, /现有资源/);
-  assert.match(html, /目标清单/);
+  assert.match(html, />重置</);
+  assert.match(html, /目标组/);
+  const resourceHeading = html.indexOf("<h3>现有资源</h3>");
+  const goalsHeading = html.indexOf("<h3>目标组</h3>");
+  const pityHeading = html.indexOf("<h3>保底状态</h3>");
+  assert.ok(resourceHeading >= 0 && resourceHeading < goalsHeading);
+  assert.ok(goalsHeading < pityHeading);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });

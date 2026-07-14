@@ -98,7 +98,11 @@ a { color: inherit; }
 }
 .sidebar-heading p, .content-heading p, .results-header p { margin: 0 0 6px; color: var(--red); font: 800 10px/1 var(--font-geist-mono), monospace; letter-spacing: .14em; }
 .sidebar-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
-.sidebar-heading > span { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.sidebar-heading-actions { display: grid; justify-items: end; gap: 8px; }
+.sidebar-heading-actions > span { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.sidebar-heading-actions button { padding: 6px 11px; color: var(--red); background: white; border: 1px solid #e4aaa4; border-radius: 6px; font-size: 9px; font-weight: 800; }
+.sidebar-heading-actions button:hover { color: white; border-color: var(--red); background: var(--red); }
+.sidebar-heading-actions button:focus-visible { outline: 3px solid rgba(242, 201, 76, .55); outline-offset: 2px; }
 
 .config-block { padding: 18px 20px; border-bottom: 1px solid var(--line); }
 .block-heading { margin-bottom: 14px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
