@@ -69,4 +69,8 @@ test("fixed seed produces stable results and cashback never hurts", () => {
   assert.deepEqual(first.withCashback, second.withCashback);
   assert.equal(first.totalProbability, second.totalProbability);
   assert.ok(first.withCashback.mean <= first.withoutCashback.mean);
+  assert.ok(first.withCashback.median <= first.withCashback.p80);
+  assert.equal(first.distribution.reduce((sum, bin) => sum + bin.count, 0), first.iterations);
+  assert.equal(first.distribution.reduce((sum, bin) => sum + bin.successful, 0), first.successSamples);
+  assert.equal(first.distribution.at(-1)?.cumulative, 1);
 });

@@ -43,9 +43,19 @@ export interface SimulationConfig {
 
 export interface RequirementStats {
   mean: number;
+  median: number;
   p80: number;
   p90: number;
   p95: number;
+}
+
+export interface DistributionBin {
+  min: number;
+  max: number;
+  count: number;
+  successful: number;
+  probability: number;
+  cumulative: number;
 }
 
 export interface SimulationResult {
@@ -54,6 +64,8 @@ export interface SimulationResult {
   totalProbability: number;
   totalProbabilityWithoutCashback: number;
   standardError: number;
+  successSamples: number;
+  successRequiredMedian: number | null;
   goalProbabilities: Array<{
     id: string;
     name: string;
@@ -63,6 +75,7 @@ export interface SimulationResult {
   withoutCashback: RequirementStats;
   hardPityPulls: number;
   generatedRefundPullsMean: number;
+  distribution: DistributionBin[];
   elapsedMs: number;
 }
 

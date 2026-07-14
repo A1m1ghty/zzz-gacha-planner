@@ -6,9 +6,9 @@ import {
 } from "./rules.ts";
 import type {
   BannerState,
+  DistributionBin,
   GoalKind,
   OwnershipProfile,
-  PullGoal,
   RequirementStats,
   SimulationConfig,
   SimulationResult,
@@ -69,10 +69,54 @@ function requirementStats(values: number[]): RequirementStats {
     sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))] ?? 0;
   return {
     mean: values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length),
+    median: pick(0.5),
     p80: pick(0.8),
     p90: pick(0.9),
     p95: pick(0.95),
   };
+}
+
+function quantile(values: number[], fraction: number) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))];
+}
+
+function distributionStats(values: number[], currentPulls: number): DistributionBin[] {
+  if (!values.length) return [];
+  let minValue = values[0];
+  let maxValue = values[0];
+  values.forEach((value) => {
+    minValue = Math.min(minValue, value);
+    maxValue = Math.max(maxValue, value);
+  });
+
+  const roughBinSize = Math.max(10, (maxValue - minValue + 1) / 18);
+  const binSize = Math.ceil(roughBinSize / 10) * 10;
+  const firstMin = Math.floor(minValue / binSize) * binSize;
+  const binCount = Math.floor((maxValue - firstMin) / binSize) + 1;
+  const bins = Array.from({ length: binCount }, (_, index) => ({
+    min: firstMin + index * binSize,
+    max: firstMin + (index + 1) * binSize - 1,
+    count: 0,
+    successful: 0,
+  }));
+
+  values.forEach((value) => {
+    const bin = bins[Math.min(bins.length - 1, Math.floor((value - firstMin) / binSize))];
+    bin.count += 1;
+    if (value <= currentPulls) bin.successful += 1;
+  });
+
+  let cumulative = 0;
+  return bins.filter((bin) => bin.count > 0).map((bin) => {
+    cumulative += bin.count;
+    return {
+      ...bin,
+      probability: bin.count / values.length,
+      cumulative: cumulative / values.length,
+    };
+  });
 }
 
 export function availablePulls(config: Pick<SimulationConfig, "resources">) {
@@ -241,12 +285,15 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
   }
 
   const probability = success / iterations;
+  const successfulRequirements = requiredValues.filter((value) => value <= currentPulls);
   return {
     iterations,
     availablePulls: currentPulls,
     totalProbability: probability,
     totalProbabilityWithoutCashback: successWithoutCashback / iterations,
     standardError: Math.sqrt((probability * (1 - probability)) / iterations),
+    successSamples: success,
+    successRequiredMedian: quantile(successfulRequirements, 0.5),
     goalProbabilities: config.goals.map((goal, index) => ({
       id: goal.id,
       name: goal.name,
@@ -256,6 +303,7 @@ export function runSimulation(config: SimulationConfig): SimulationResult {
     withoutCashback: requirementStats(grossValues),
     hardPityPulls: calculateHardPity(config),
     generatedRefundPullsMean: refundTotal / iterations,
+    distribution: distributionStats(requiredValues, currentPulls),
     elapsedMs: Date.now() - started,
   };
 }

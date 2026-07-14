@@ -222,6 +222,18 @@ function pullLabel(value: number) {
   return `${Math.ceil(value).toLocaleString("zh-CN")} 抽`;
 }
 
+function ownershipLabel(kind: GoalKind, value: number) {
+  const options = kind === "agent" ? AGENT_OWNERSHIP_OPTIONS : ENGINE_OWNERSHIP_OPTIONS;
+  return options.find((option) => option.value === value)?.label ?? "无";
+}
+
+function confidenceMargin95(probability: number, iterations: number) {
+  const z = 1.96;
+  const denominator = 1 + (z * z) / iterations;
+  const variance = (probability * (1 - probability)) / iterations + (z * z) / (4 * iterations * iterations);
+  return (z * Math.sqrt(variance)) / denominator;
+}
+
 export default function Planner() {
   const [state, setState] = useState<SavedPlannerState>(() => createDefaultState());
   const [hydrated, setHydrated] = useState(false);
@@ -339,6 +351,28 @@ export default function Planner() {
     [state.resources],
   );
 
+  const simulationPremises = useMemo(() => {
+    const premises = goalGroups.map((group, index) => {
+      const agent = group.agent;
+      const engine = group.engine;
+      const agentText = agent
+        ? `代理人 ${ownershipLabel("agent", agent.currentOwned)} → ${agent.targetOwned ? ownershipLabel("agent", agent.targetOwned) : "不抽取"}`
+        : "代理人不抽取";
+      const engineText = engine
+        ? `音擎 ${ownershipLabel("engine", engine.currentOwned)} → ${engine.targetOwned ? ownershipLabel("engine", engine.targetOwned) : "不抽取"}`
+        : "音擎不抽取";
+      return `第 ${index + 1} 组：${agentText}；${engineText}。`;
+    });
+    premises.push(
+      `代理人池：S级垫抽 ${state.banners.agent.sPity}，${state.banners.agent.guaranteedS ? "下一个S级为大保底" : "当前无大保底"}；A级垫抽 ${state.banners.agent.aPity}。`,
+      `音擎池：S级垫抽 ${state.banners.engine.sPity}，${state.banners.engine.guaranteedS ? "下一个S级为大保底" : "当前无大保底"}；A级垫抽 ${state.banners.engine.aPity}。`,
+      `现有资源：${state.resources.polychrome.toLocaleString("zh-CN")} 菲林、${state.resources.monochrome.toLocaleString("zh-CN")} 单色菲林、${state.resources.encryptedTapes.toLocaleString("zh-CN")} 加密母带、${state.resources.residualSignals.toLocaleString("zh-CN")} 信号余波。`,
+      "菲林与单色菲林合并后按 160 枚兑换 1 抽，信号余波按 20 个兑换 1 张加密母带。",
+      "抽出重复代理人或音擎产生的信号余波会在路径内继续换抽；不计B级残响和月度商店。",
+    );
+    return premises;
+  }, [goalGroups, state.banners, state.resources]);
+
   const updateBanner = (kind: GoalKind, patch: Partial<BannerState>) =>
     setState((current) => ({
       ...current,
@@ -426,6 +460,7 @@ export default function Planner() {
   };
 
   const shortage = (needed: number) => Math.max(0, Math.ceil(needed) - currentResourcePulls);
+  const distributionPeak = Math.max(1, ...(result?.distribution.map((bin) => bin.count) ?? [1]));
 
   return (
     <div className="app-shell" id="top">
@@ -633,30 +668,73 @@ export default function Planner() {
             </div>
             {result ? (
               <>
-                <div className="result-hero">
-                  <article className="probability-block"><span>全部目标达成率</span><strong>{pct(result.totalProbability)}</strong><p>当前资源 · 计入余波返还</p></article>
-                  <article className="summary-stat"><span>90% 把握所需</span><strong>{pullLabel(result.withCashback.p90)}</strong><p>{shortage(result.withCashback.p90) ? `还差 ${shortage(result.withCashback.p90)} 抽` : "现有资源已覆盖"}</p></article>
-                  <article className="summary-stat"><span>平均返还影响</span><strong>{result.generatedRefundPullsMean.toFixed(1)} 抽</strong><p>不计返还达成率 {pct(result.totalProbabilityWithoutCashback)}</p></article>
+                <div className="result-summary-grid">
+                  <article className="result-summary-card probability"><span>全部目标达成率</span><strong>{pct(result.totalProbability)}</strong><p>{result.successSamples.toLocaleString("zh-CN")} / {result.iterations.toLocaleString("zh-CN")} 次成功</p></article>
+                  <article className="result-summary-card"><span>当前资源最多可抽</span><strong>{result.availablePulls.toLocaleString("zh-CN")} 抽</strong><p>菲林、母带与余波折算</p></article>
+                  <article className="result-summary-card success"><span>成功样本中位抽数</span><strong>{result.successRequiredMedian === null ? "—" : pullLabel(result.successRequiredMedian)}</strong><p>{result.successRequiredMedian === null ? "当前没有成功样本" : "仅统计当前资源内完成的路径"}</p></article>
+                  <article className="result-summary-card info"><span>所有样本中位抽数</span><strong>{pullLabel(result.withCashback.median)}</strong><p>全部随机路径的典型总投入</p></article>
+                  <article className="result-summary-card info"><span>所有样本中位补抽</span><strong>{shortage(result.withCashback.median).toLocaleString("zh-CN")} 抽</strong><p>{shortage(result.withCashback.median) ? `${(shortage(result.withCashback.median) * POLYCHROME_PER_PULL).toLocaleString("zh-CN")} 菲林` : "现有资源已覆盖中位数"}</p></article>
+                  <article className="result-summary-card info"><span>90% 把握所需补抽</span><strong>{shortage(result.withCashback.p90).toLocaleString("zh-CN")} 抽</strong><p>总需求 {pullLabel(result.withCashback.p90)}</p></article>
                 </div>
-                <p className="confidence-note">抽样标准误差 ±{(result.standardError * 100).toFixed(2)} 个百分点 · {result.iterations.toLocaleString("zh-CN")} 次固定种子模拟</p>
-                <div className="result-grid">
-                  {[{ key: "mean", label: "平均所需" }, { key: "p80", label: "80% 把握" }, { key: "p90", label: "90% 把握" }, { key: "p95", label: "95% 把握" }] .map((item) => {
-                    const needed = result.withCashback[item.key as keyof typeof result.withCashback];
-                    const gap = shortage(needed);
-                    return <article className="metric-card" key={item.key}><span>{item.label}</span><strong>{pullLabel(needed)}</strong><p className={gap ? "short" : "enough"}>{gap ? `还差 ${gap} 抽 / ${(gap * POLYCHROME_PER_PULL).toLocaleString("zh-CN")} 菲林` : "现有资源已覆盖"}</p></article>;
-                  })}
-                  <article className="metric-card hard"><span>最坏硬保底</span><strong>{pullLabel(result.hardPityPulls)}</strong><p className={shortage(result.hardPityPulls) ? "short" : "enough"}>{shortage(result.hardPityPulls) ? `还差 ${shortage(result.hardPityPulls)} 抽 / ${(shortage(result.hardPityPulls) * 160).toLocaleString("zh-CN")} 菲林` : "现有资源已覆盖"}</p></article>
+
+                <div className="sampling-notice">
+                  <strong>模拟波动提示</strong>
+                  <p>按当前达成率估算，固定 {result.iterations.toLocaleString("zh-CN")} 次模拟下的 95% 采样波动约为上下 {(confidenceMargin95(result.totalProbability, result.iterations) * 100).toFixed(2)} 个百分点。判断资源是否稳妥时，建议同时查看中位补抽、90%需求和完整分布。</p>
                 </div>
-                <div className="goal-probabilities panel">
-                  <div className="profile-title"><h3>逐目标累计达成率</h3><span>后一个目标包含之前目标已完成</span></div>
-                  {result.goalProbabilities.map((goal, index) => (
-                    <div className="probability-row" key={goal.id}><span><i>{index + 1}</i>{goal.name || "未命名目标"}</span><div><b style={{ width: `${goal.probability * 100}%` }} /></div><strong>{pct(goal.probability)}</strong></div>
-                  ))}
-                </div>
-                <div className="cashback-table panel">
-                  <div className="profile-title"><h3>返还资源对照</h3><span>同一批随机路径</span></div>
-                  <div className="table-scroll"><table><thead><tr><th>口径</th><th>平均</th><th>80%</th><th>90%</th><th>95%</th></tr></thead><tbody><tr><td>计入余波返还</td><td>{pullLabel(result.withCashback.mean)}</td><td>{pullLabel(result.withCashback.p80)}</td><td>{pullLabel(result.withCashback.p90)}</td><td>{pullLabel(result.withCashback.p95)}</td></tr><tr><td>不计返还</td><td>{pullLabel(result.withoutCashback.mean)}</td><td>{pullLabel(result.withoutCashback.p80)}</td><td>{pullLabel(result.withoutCashback.p90)}</td><td>{pullLabel(result.withoutCashback.p95)}</td></tr></tbody></table></div>
-                </div>
+
+                <details className="result-supplement">
+                  <summary><strong>补充统计</strong><span>点击展开平均值、分位数、逐目标概率与返还对照</span></summary>
+                  <div className="result-supplement-content">
+                    <div className="result-grid">
+                      {[{ key: "mean", label: "平均所需" }, { key: "p80", label: "80% 把握" }, { key: "p90", label: "90% 把握" }, { key: "p95", label: "95% 把握" }] .map((item) => {
+                        const needed = result.withCashback[item.key as keyof typeof result.withCashback];
+                        const gap = shortage(needed);
+                        return <article className="metric-card" key={item.key}><span>{item.label}</span><strong>{pullLabel(needed)}</strong><p className={gap ? "short" : "enough"}>{gap ? `还差 ${gap} 抽 / ${(gap * POLYCHROME_PER_PULL).toLocaleString("zh-CN")} 菲林` : "现有资源已覆盖"}</p></article>;
+                      })}
+                      <article className="metric-card hard"><span>最坏硬保底</span><strong>{pullLabel(result.hardPityPulls)}</strong><p className={shortage(result.hardPityPulls) ? "short" : "enough"}>{shortage(result.hardPityPulls) ? `还差 ${shortage(result.hardPityPulls)} 抽 / ${(shortage(result.hardPityPulls) * 160).toLocaleString("zh-CN")} 菲林` : "现有资源已覆盖"}</p></article>
+                    </div>
+                    <div className="goal-probabilities panel">
+                      <div className="profile-title"><h3>逐目标累计达成率</h3><span>后一个目标包含之前目标已完成</span></div>
+                      {result.goalProbabilities.map((goal, index) => (
+                        <div className="probability-row" key={goal.id}><span><i>{index + 1}</i>{goal.name || "未命名目标"}</span><div><b style={{ width: `${goal.probability * 100}%` }} /></div><strong>{pct(goal.probability)}</strong></div>
+                      ))}
+                    </div>
+                    <div className="cashback-table panel">
+                      <div className="profile-title"><h3>返还资源对照</h3><span>同一批随机路径</span></div>
+                      <div className="table-scroll"><table><thead><tr><th>口径</th><th>平均</th><th>中位</th><th>80%</th><th>90%</th><th>95%</th></tr></thead><tbody><tr><td>计入余波返还</td><td>{pullLabel(result.withCashback.mean)}</td><td>{pullLabel(result.withCashback.median)}</td><td>{pullLabel(result.withCashback.p80)}</td><td>{pullLabel(result.withCashback.p90)}</td><td>{pullLabel(result.withCashback.p95)}</td></tr><tr><td>不计返还</td><td>{pullLabel(result.withoutCashback.mean)}</td><td>{pullLabel(result.withoutCashback.median)}</td><td>{pullLabel(result.withoutCashback.p80)}</td><td>{pullLabel(result.withoutCashback.p90)}</td><td>{pullLabel(result.withoutCashback.p95)}</td></tr></tbody></table></div>
+                    </div>
+                  </div>
+                </details>
+
+                <section className="result-detail-panel premise-panel">
+                  <div className="result-detail-heading"><div><p>PLAN INPUTS</p><h3>模拟前提</h3></div><span>本次结果采用的输入快照</span></div>
+                  <ul>{simulationPremises.map((premise, index) => <li key={index}>{premise}</li>)}</ul>
+                </section>
+
+                <section className="result-detail-panel distribution-panel">
+                  <div className="result-detail-heading">
+                    <div><p>DISTRIBUTION</p><h3>达成与缺口分布</h3></div>
+                    <span><i className="legend-success" />当前资源可达成 <i className="legend-shortage" />需要补抽</span>
+                  </div>
+                  <p className="distribution-note">按计入余波返还后的外部投入分组；区间内同时出现达成与缺口样本时，色条会按两者比例拆分。</p>
+                  <div className="distribution-scroll">
+                    <table className="distribution-table">
+                      <thead><tr><th>抽数区间</th><th>成功 / 缺口分布</th><th>区间占比</th><th>累计占比</th><th>频数</th></tr></thead>
+                      <tbody>{result.distribution.map((bin) => {
+                        const successShare = bin.count ? (bin.successful / bin.count) * 100 : 0;
+                        return (
+                          <tr key={`${bin.min}-${bin.max}`}>
+                            <td>{bin.min} ～ {bin.max}</td>
+                            <td><div className="distribution-track"><div className="distribution-fill" style={{ width: `${(bin.count / distributionPeak) * 100}%` }}><span className="distribution-success" style={{ width: `${successShare}%` }} /><span className="distribution-shortage" style={{ width: `${100 - successShare}%` }} /></div></div></td>
+                            <td>{pct(bin.probability)}</td>
+                            <td>{pct(bin.cumulative)}</td>
+                            <td>{bin.count.toLocaleString("zh-CN")} {bin.successful === bin.count ? "达成" : bin.successful === 0 ? "缺口" : "混合"}</td>
+                          </tr>
+                        );
+                      })}</tbody>
+                    </table>
+                  </div>
+                </section>
               </>
             ) : <div className="results-loading"><span /><p>{status}</p></div>}
           </section>
