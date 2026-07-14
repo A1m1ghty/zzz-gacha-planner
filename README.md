@@ -26,4 +26,4 @@ npm install
 npm run dev
 ```
 
-Sites 生产构建使用 `npm run build`，GitHub Pages 静态构建使用 `npm run build:pages`，测试使用 `npm test`。
+Sites 生产构建使用 `npm run build`，GitHub Pages 静态构建使用 `npm run build:pages`。静态产物生成到 `docs/`，供 GitHub Pages 直接发布；测试使用 `npm test`。

@@ -5,7 +5,7 @@ export default defineConfig({
   base: "/zzz-gacha-planner/",
   plugins: [react()],
   build: {
-    outDir: "pages-dist",
+    outDir: "docs",
     emptyOutDir: true,
   },
 });
