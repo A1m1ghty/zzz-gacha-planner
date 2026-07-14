@@ -19,6 +19,14 @@ import type {
 
 const STORAGE_KEY = "new-eridu-signal-planner-v1";
 const BUCKET_LABELS = ["未持有", "M0", "M1", "M2", "M3", "M4", "M5", "M6+"];
+const AGENT_OWNERSHIP_OPTIONS = [
+  { value: 0, label: "无" },
+  ...Array.from({ length: 7 }, (_, index) => ({ value: index + 1, label: `M${index}` })),
+];
+const ENGINE_OWNERSHIP_OPTIONS = [
+  { value: 0, label: "无" },
+  ...Array.from({ length: 5 }, (_, index) => ({ value: index + 1, label: `${index + 1} 星` })),
+];
 
 const freshBanner = (): BannerState => ({
   sPity: 0,
@@ -32,15 +40,49 @@ const newId = () =>
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const createGoal = (kind: GoalKind): PullGoal => ({
+const createGoal = (kind: GoalKind, groupId = newId(), targetOwned = 1): PullGoal => ({
   id: newId(),
+  groupId,
   kind,
-  name: kind === "agent" ? "目标代理人" : "目标音擎",
+  name: kind === "agent" ? "目标限定代理人" : "目标限定音擎",
   currentOwned: 0,
-  targetOwned: 1,
+  targetOwned,
   specialGuarantee: false,
   featuredA: kind === "agent" ? ["UP A级代理人 1", "UP A级代理人 2"] : ["UP A级音擎 1", "UP A级音擎 2"],
 });
+
+const createGoalGroup = () => {
+  const groupId = newId();
+  return [createGoal("agent", groupId), createGoal("engine", groupId)];
+};
+
+function normalizeGoalGroups(goals: PullGoal[]) {
+  const orderedGroupIds: string[] = [];
+  const grouped = new Map<string, Partial<Record<GoalKind, PullGoal>>>();
+  let legacyGroupId = "";
+
+  goals.forEach((goal) => {
+    let groupId = goal.groupId?.trim() || "";
+    if (!groupId) {
+      const legacyGroup = legacyGroupId ? grouped.get(legacyGroupId) : undefined;
+      if (!legacyGroup || legacyGroup[goal.kind]) legacyGroupId = newId();
+      groupId = legacyGroupId;
+    }
+    if (!grouped.has(groupId)) {
+      grouped.set(groupId, {});
+      orderedGroupIds.push(groupId);
+    }
+    grouped.get(groupId)![goal.kind] = { ...goal, groupId };
+  });
+
+  return orderedGroupIds.flatMap((groupId) => {
+    const group = grouped.get(groupId)!;
+    return [
+      group.agent ?? createGoal("agent", groupId, 0),
+      group.engine ?? createGoal("engine", groupId, 0),
+    ];
+  });
+}
 
 const createDefaultState = (): SavedPlannerState => ({
   schemaVersion: 1,
@@ -59,7 +101,7 @@ const createDefaultState = (): SavedPlannerState => ({
       "UP A级代理人 2": 1,
     },
   },
-  goals: [createGoal("agent"), createGoal("engine")],
+  goals: createGoalGroup(),
 });
 
 function clampNumber(value: unknown, min: number, max: number) {
@@ -89,22 +131,28 @@ function validateImported(value: unknown): SavedPlannerState {
         ...state.banners.agent,
         sPity: clampNumber(state.banners.agent.sPity, 0, 89),
         aPity: clampNumber(state.banners.agent.aPity, 0, 9),
+        guaranteedS: Boolean(state.banners.agent.guaranteedS),
+        guaranteedA: false,
       },
       engine: {
         ...state.banners.engine,
         sPity: clampNumber(state.banners.engine.sPity, 0, 79),
         aPity: clampNumber(state.banners.engine.aPity, 0, 9),
+        guaranteedS: Boolean(state.banners.engine.guaranteedS),
+        guaranteedA: false,
       },
     },
-    goals: state.goals.map((goal) => ({
+    goals: normalizeGoalGroups(state.goals.map((goal) => ({
       ...goal,
       id: goal.id || newId(),
+      groupId: typeof goal.groupId === "string" ? goal.groupId : undefined,
       name: String(goal.name || "未命名目标"),
       kind: goal.kind === "engine" ? "engine" : "agent",
       currentOwned: clampNumber(goal.currentOwned, 0, goal.kind === "engine" ? 5 : 7),
-      targetOwned: clampNumber(goal.targetOwned, 1, goal.kind === "engine" ? 5 : 7),
+      targetOwned: clampNumber(goal.targetOwned, 0, goal.kind === "engine" ? 5 : 7),
+      specialGuarantee: Boolean(goal.specialGuarantee),
       featuredA: [String(goal.featuredA?.[0] || "UP A级 1"), String(goal.featuredA?.[1] || "UP A级 2")],
-    })),
+    }))),
   };
 }
 
@@ -181,7 +229,6 @@ export default function Planner() {
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState("正在准备概率模型…");
   const [importError, setImportError] = useState("");
-  const [draggedId, setDraggedId] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const runTokenRef = useRef(0);
 
@@ -200,13 +247,38 @@ export default function Planner() {
     if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state, hydrated]);
 
+  const goalGroups = useMemo(() => {
+    const groups = new Map<string, { id: string; agent?: PullGoal; engine?: PullGoal }>();
+    state.goals.forEach((goal) => {
+      const groupId = goal.groupId || goal.id;
+      if (!groups.has(groupId)) groups.set(groupId, { id: groupId });
+      groups.get(groupId)![goal.kind] = goal;
+    });
+    return [...groups.values()];
+  }, [state.goals]);
+
+  const activeGoals = useMemo(() => {
+    const groupOrder = new Map(goalGroups.map((group, index) => [group.id, index + 1]));
+    return state.goals
+      .filter((goal) => goal.targetOwned > 0)
+      .map((goal) => ({
+        ...goal,
+        name: `第 ${groupOrder.get(goal.groupId || goal.id) ?? 1} 组 · ${goal.kind === "agent" ? "限定代理人" : "限定音擎"}`,
+      }));
+  }, [goalGroups, state.goals]);
+
   const simulationConfig = useCallback(
     (iterations: number): SimulationConfig => ({
       ...state,
+      banners: {
+        agent: { ...state.banners.agent, guaranteedA: false },
+        engine: { ...state.banners.engine, guaranteedA: false },
+      },
+      goals: activeGoals,
       iterations,
       seed: 0x5a17e202,
     }),
-    [state],
+    [activeGoals, state],
   );
 
   const stopWorker = useCallback(() => {
@@ -219,9 +291,9 @@ export default function Planner() {
   const run = useCallback(
     (iterations: number, label: string) => {
       stopWorker();
-      if (!state.goals.length) {
+      if (!activeGoals.length) {
         setResult(null);
-        setStatus("请先添加至少一个抽取目标。 ");
+        setStatus("请先在目标组中选择至少一个抽取目标。 ");
         return;
       }
       const token = runTokenRef.current;
@@ -248,7 +320,7 @@ export default function Planner() {
       };
       worker.postMessage(simulationConfig(iterations));
     },
-    [simulationConfig, state.goals.length, stopWorker],
+    [activeGoals.length, simulationConfig, stopWorker],
   );
 
   useEffect(() => {
@@ -279,29 +351,14 @@ export default function Planner() {
       goals: current.goals.map((goal) => (goal.id === id ? { ...goal, ...patch } : goal)),
     }));
 
-  const moveGoal = (id: string, direction: -1 | 1) =>
-    setState((current) => {
-      const index = current.goals.findIndex((goal) => goal.id === id);
-      const target = index + direction;
-      if (index < 0 || target < 0 || target >= current.goals.length) return current;
-      const goals = [...current.goals];
-      [goals[index], goals[target]] = [goals[target], goals[index]];
-      return { ...current, goals };
-    });
+  const addGoalGroup = () =>
+    setState((current) => ({ ...current, goals: [...current.goals, ...createGoalGroup()] }));
 
-  const dropGoal = (targetId: string) => {
-    if (!draggedId || draggedId === targetId) return;
-    setState((current) => {
-      const goals = [...current.goals];
-      const from = goals.findIndex((goal) => goal.id === draggedId);
-      const to = goals.findIndex((goal) => goal.id === targetId);
-      if (from < 0 || to < 0) return current;
-      const [moved] = goals.splice(from, 1);
-      goals.splice(to, 0, moved);
-      return { ...current, goals };
-    });
-    setDraggedId(null);
-  };
+  const deleteGoalGroup = (groupId: string) =>
+    setState((current) => ({
+      ...current,
+      goals: current.goals.filter((goal) => (goal.groupId || goal.id) !== groupId),
+    }));
 
   const exportData = () => {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
@@ -364,11 +421,6 @@ export default function Planner() {
           checked={banner.guaranteedS}
           onChange={(guaranteedS) => updateBanner(kind, { guaranteedS })}
         />
-        <Toggle
-          label="下一个A级为当期UP"
-          checked={banner.guaranteedA}
-          onChange={(guaranteedA) => updateBanner(kind, { guaranteedA })}
-        />
       </div>
     );
   };
@@ -428,74 +480,87 @@ export default function Planner() {
 
             <section className="config-block goals-block">
               <div className="block-heading targets-heading">
-                <div><h3>目标清单</h3><span>按顺序消耗资源</span></div>
-                <div className="add-actions">
-                  <button onClick={() => setState((current) => ({ ...current, goals: [...current.goals, createGoal("agent")] }))}>＋代理人</button>
-                  <button onClick={() => setState((current) => ({ ...current, goals: [...current.goals, createGoal("engine")] }))}>＋音擎</button>
-                </div>
+                <div><h3>目标组</h3><span>按组号依次消耗资源</span></div>
               </div>
-              <div className="goal-list">
-                {state.goals.map((goal, index) => {
-                  const maxOwned = goal.kind === "agent" ? 7 : 5;
+              <div className="goal-group-list">
+                {goalGroups.map((group, index) => {
+                  const agentGoal = group.agent;
+                  const engineGoal = group.engine;
+                  if (!agentGoal || !engineGoal) return null;
+                  const groupGoals = [agentGoal, engineGoal];
                   return (
-                    <article
-                      className={`goal-card ${draggedId === goal.id ? "dragging" : ""}`}
-                      key={goal.id}
-                      draggable
-                      onDragStart={() => setDraggedId(goal.id)}
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={() => dropGoal(goal.id)}
-                    >
-                      <div className="goal-card-head">
-                        <span className={`goal-order ${goal.kind}`}>{index + 1}</span>
-                        <label className="kind-select">
-                          <span>频段</span>
-                          <select value={goal.kind} onChange={(event) => {
-                            const kind = event.target.value as GoalKind;
-                            updateGoal(goal.id, { kind, currentOwned: 0, targetOwned: 1, featuredA: kind === "agent" ? ["UP A级代理人 1", "UP A级代理人 2"] : ["UP A级音擎 1", "UP A级音擎 2"] });
-                          }}>
-                            <option value="agent">限定代理人</option>
-                            <option value="engine">限定音擎</option>
+                    <article className="goal-group" key={group.id}>
+                      <div className="goal-group-head">
+                        <h4>第 {index + 1} 组目标</h4>
+                        <button aria-label={`删除第 ${index + 1} 组目标`} onClick={() => deleteGoalGroup(group.id)}>删除</button>
+                      </div>
+
+                      <div className="goal-group-rows">
+                        <div className="goal-group-row target agent">
+                          <span className="goal-token" aria-hidden="true">代</span>
+                          <label htmlFor={`${agentGoal.id}-target`}>目标限定代理人</label>
+                          <select id={`${agentGoal.id}-target`} value={agentGoal.targetOwned} onChange={(event) => updateGoal(agentGoal.id, { targetOwned: Number(event.target.value) })}>
+                            {AGENT_OWNERSHIP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                           </select>
-                        </label>
-                        <div className="goal-controls">
-                          <button aria-label="上移" disabled={index === 0} onClick={() => moveGoal(goal.id, -1)}>↑</button>
-                          <button aria-label="下移" disabled={index === state.goals.length - 1} onClick={() => moveGoal(goal.id, 1)}>↓</button>
-                          <button className="danger" aria-label="删除目标" onClick={() => setState((current) => ({ ...current, goals: current.goals.filter((item) => item.id !== goal.id) }))}>×</button>
+                        </div>
+                        <div className="goal-group-row target engine">
+                          <span className="goal-token" aria-hidden="true">擎</span>
+                          <label htmlFor={`${engineGoal.id}-target`}>目标限定音擎</label>
+                          <select id={`${engineGoal.id}-target`} value={engineGoal.targetOwned} onChange={(event) => updateGoal(engineGoal.id, { targetOwned: Number(event.target.value) })}>
+                            {ENGINE_OWNERSHIP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
+                        </div>
+                        <div className="goal-group-row current agent">
+                          <span className="goal-token" aria-hidden="true">代</span>
+                          <label htmlFor={`${agentGoal.id}-current`}>当前限定代理人</label>
+                          <select id={`${agentGoal.id}-current`} value={agentGoal.currentOwned} onChange={(event) => updateGoal(agentGoal.id, { currentOwned: Number(event.target.value) })}>
+                            {AGENT_OWNERSHIP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
+                        </div>
+                        <div className="goal-group-row current engine">
+                          <span className="goal-token" aria-hidden="true">擎</span>
+                          <label htmlFor={`${engineGoal.id}-current`}>当前限定音擎</label>
+                          <select id={`${engineGoal.id}-current`} value={engineGoal.currentOwned} onChange={(event) => updateGoal(engineGoal.id, { currentOwned: Number(event.target.value) })}>
+                            {ENGINE_OWNERSHIP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
                         </div>
                       </div>
-                      <label className="name-field"><span>目标名称</span><input value={goal.name} maxLength={30} onChange={(event) => updateGoal(goal.id, { name: event.target.value })} /></label>
-                      <div className="goal-fields">
-                        <NumberInput label="当前持有" value={goal.currentOwned} max={maxOwned} suffix={goal.kind === "agent" ? "份" : "星"} onChange={(currentOwned) => updateGoal(goal.id, { currentOwned, targetOwned: Math.max(currentOwned, goal.targetOwned) })} />
-                        <NumberInput label="目标持有" value={goal.targetOwned} min={1} max={maxOwned} suffix={goal.kind === "agent" ? "份" : "星"} onChange={(targetOwned) => updateGoal(goal.id, { targetOwned: Math.max(goal.currentOwned, targetOwned) })} />
-                      </div>
-                      <Toggle label="重映首次S级必得" checked={goal.specialGuarantee} hint="仅消耗该目标的特殊保底" onChange={(specialGuarantee) => updateGoal(goal.id, { specialGuarantee })} />
-                      <details className="goal-advanced">
-                        <summary>UP A级与返还设置</summary>
-                        <div className="featured-a-row">
-                          {goal.featuredA.map((name, aIndex) => (
-                            <label key={aIndex}><span>UP A级 {aIndex + 1}</span><input value={name} onChange={(event) => {
-                              const next = [...goal.featuredA] as [string, string];
-                              next[aIndex] = event.target.value;
-                              updateGoal(goal.id, { featuredA: next });
-                              if (goal.kind === "agent" && !(event.target.value in state.ownership.trackedAAgents)) {
-                                setState((current) => ({ ...current, ownership: { ...current.ownership, trackedAAgents: { ...current.ownership.trackedAAgents, [event.target.value]: 0 } } }));
-                              }
-                            }} /></label>
+
+                      <details className="goal-group-advanced">
+                        <summary>高级：重映与UP A级设置</summary>
+                        <div className="goal-group-advanced-content">
+                          {groupGoals.map((goal) => (
+                            <section className="goal-sub-settings" key={goal.id}>
+                              <h5>{goal.kind === "agent" ? "限定代理人" : "限定音擎"}</h5>
+                              <Toggle label="重映首次S级必得" checked={goal.specialGuarantee} hint="仅消耗这个槽位的特殊保底" onChange={(specialGuarantee) => updateGoal(goal.id, { specialGuarantee })} />
+                              <div className="featured-a-row">
+                                {goal.featuredA.map((name, aIndex) => (
+                                  <label key={aIndex}><span>UP A级 {aIndex + 1}</span><input value={name} onChange={(event) => {
+                                    const next = [...goal.featuredA] as [string, string];
+                                    next[aIndex] = event.target.value;
+                                    updateGoal(goal.id, { featuredA: next });
+                                    if (goal.kind === "agent" && !(event.target.value in state.ownership.trackedAAgents)) {
+                                      setState((current) => ({ ...current, ownership: { ...current.ownership, trackedAAgents: { ...current.ownership.trackedAAgents, [event.target.value]: 0 } } }));
+                                    }
+                                  }} /></label>
+                                ))}
+                              </div>
+                              {goal.kind === "agent" && (
+                                <div className="tracked-row">
+                                  {goal.featuredA.map((name, aIndex) => (
+                                    <NumberInput key={`${name}-${aIndex}`} label={`${name || "未命名UP"} 当前`} value={state.ownership.trackedAAgents[name] ?? 0} max={7} suffix="份" onChange={(value) => setState((current) => ({ ...current, ownership: { ...current.ownership, trackedAAgents: { ...current.ownership.trackedAAgents, [name]: value } } }))} />
+                                  ))}
+                                </div>
+                              )}
+                            </section>
                           ))}
                         </div>
-                        {goal.kind === "agent" && (
-                          <div className="tracked-row">
-                            {goal.featuredA.map((name) => (
-                              <NumberInput key={name} label={`${name || "未命名UP"} 当前`} value={state.ownership.trackedAAgents[name] ?? 0} max={7} suffix="份" onChange={(value) => setState((current) => ({ ...current, ownership: { ...current.ownership, trackedAAgents: { ...current.ownership.trackedAAgents, [name]: value } } }))} />
-                            ))}
-                          </div>
-                        )}
                       </details>
                     </article>
                   );
                 })}
-                {!state.goals.length && <div className="empty-state">添加一个代理人或音擎目标后即可计算。</div>}
+                {!goalGroups.length && <div className="empty-state">添加目标组后即可开始规划。</div>}
+                <button className="goal-group-add" onClick={addGoalGroup}>＋ 添加目标组</button>
               </div>
             </section>
 

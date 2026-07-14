@@ -22,6 +22,7 @@ export interface OwnershipProfile {
 
 export interface PullGoal {
   id: string;
+  groupId?: string;
   kind: GoalKind;
   name: string;
   currentOwned: number;
